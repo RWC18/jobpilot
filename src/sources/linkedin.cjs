@@ -71,59 +71,77 @@ async function details(job) {
   return { description, seniority: criteria['Seniority level'] || '', term: type ? classifyTerm(type, description) : job.term };
 }
 
+// LinkedIn's 2026 design uses scrambled class names, so buttons are found by their accessible names
+// (English first, Russian as a fallback) and the Easy Apply window is a native <dialog>.
+const BTN = {
+  easyApply: /easy apply|простая подача заявки/i,
+  next: /^(next|continue|далее|продолжить)$/i,
+  review: /^(review|проверить)$/i,
+  submit: /^(submit application|submit|отправить заявку|отправить)$/i,
+  done: /^(done|dismiss|готово|закрыть)$/i,
+};
+const DIALOG = 'dialog[open], [role="dialog"]';
+
 /** Walks through the Easy Apply dialog. Returns 'applied' or throws NeedsUser with the reason. */
-async function apply(job, { cvPath, log }) {
+async function apply(job, { cvPath, log, dryRun = false }) {
   const page = await browser.newPage();
   let keep = false;
   try {
     await page.goto(job.url, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(2500);
+    await page.waitForTimeout(4000);
     if (/\/(login|authwall|checkpoint|uas)/.test(page.url())) throw new NeedsUser('Log in to LinkedIn first (Settings → Connect LinkedIn).');
     if (await browser.hasHumanCheck(page)) throw new NeedsUser('LinkedIn is showing a security check. Solve it in the JobPilot Chrome window.');
 
-    const applied = page.locator('.artdeco-inline-feedback--success:has-text("Applied")').first();
-    if (await applied.isVisible().catch(() => false)) return 'applied';
+    const topText = await page.locator('main').first().innerText().catch(() => '');
+    if (/\bApplied (\d+|on)\b|Application submitted|Вы откликнулись|Заявка отправлена/i.test(topText.slice(0, 1500))) return 'applied';
 
-    const btn = page.locator('button.jobs-apply-button:visible, button:has-text("Easy Apply"):visible').first();
-    if (!(await btn.isVisible().catch(() => false))) throw new NeedsUser('No Easy Apply button (job closed or applies on company site).');
+    const btn = page.getByRole('button', { name: BTN.easyApply }).first();
+    if (!(await btn.isVisible().catch(() => false))) throw new NeedsUser('No Easy Apply button (job closed or applies on the company site).');
     await btn.click();
 
-    const modal = '.jobs-easy-apply-modal, [data-test-modal][role="dialog"], div[role="dialog"]';
-    await page.waitForSelector(modal, { timeout: 10000 });
-    let lastHeading = '';
+    const dialog = page.locator(DIALOG).first();
+    await dialog.waitFor({ timeout: 10000 });
+    let lastKey = '';
     let sameStep = 0;
 
     for (let step = 0; step < 15; step++) {
-      await page.waitForTimeout(1200);
-      const hasResume = await page.locator(`${modal} .jobs-document-upload-redesign-card__container--selected, ${modal} [aria-label*="Selected" i][aria-label*="resume" i]`).count();
-      await fillForm(page, { scopeSel: '.jobs-easy-apply-modal, div[role="dialog"]', job, cvPath, skipFiles: hasResume > 0 });
+      await page.waitForTimeout(1300);
+      // Resumes uploaded before are listed by file name; pick those instead of uploading a duplicate.
+      const dialogText = await dialog.innerText().catch(() => '');
+      await fillForm(page, { scopeSel: 'dialog[open]', job, cvPath, skipFiles: /\.pdf|\.docx/i.test(dialogText) });
 
       // Don't follow the company as a side effect of applying.
-      const follow = page.locator(`${modal} input#follow-company-checkbox`);
+      const follow = dialog.getByRole('checkbox', { name: /follow|подпис/i }).first();
       if (await follow.isChecked().catch(() => false)) await follow.evaluate((el) => el.click());
 
-      const submit = page.locator(`${modal} button:has-text("Submit application")`).first();
+      const submit = dialog.getByRole('button', { name: BTN.submit }).first();
       if (await submit.isVisible().catch(() => false)) {
+        if (dryRun) {
+          // Test mode: everything is filled in; close without sending.
+          log?.(`Dry run: ready to submit ${job.title}; closing without sending.`);
+          await dialog.getByRole('button', { name: /^(dismiss|закрыть)$/i }).first().click();
+          await page.locator(DIALOG).getByRole('button', { name: /^(discard|не сохранять|удалить)$/i }).first().click().catch(() => {});
+          return 'dry-run';
+        }
         await submit.click();
-        await page.waitForTimeout(3000);
-        await page.locator('button[aria-label="Dismiss"], button:has-text("Done")').first().click().catch(() => {});
+        await page.waitForTimeout(3500);
+        await page.locator(DIALOG).getByRole('button', { name: BTN.done }).first().click().catch(() => {});
         return 'applied';
       }
-      const next = page.locator(`${modal} button:has-text("Review"), ${modal} button:has-text("Next"), ${modal} button:has-text("Continue")`).first();
-      if (!(await next.isVisible().catch(() => false))) throw new NeedsUser('Could not find the Next button in Easy Apply.');
+      const next = dialog.getByRole('button', { name: BTN.review }).or(dialog.getByRole('button', { name: BTN.next })).first();
+      if (!(await next.isVisible().catch(() => false))) throw new NeedsUser('Could not find the Next button in Easy Apply. Finish it in the Chrome window.');
       await next.click();
       await page.waitForTimeout(1500);
 
-      const heading = await page.locator(`${modal} h3, ${modal} h2`).first().innerText().catch(() => '');
-      const progress = await page.locator(`${modal} [role="progressbar"]`).getAttribute('aria-valuenow').catch(() => '');
-      const key = heading + progress;
-      sameStep = key === lastHeading ? sameStep + 1 : 0;
-      lastHeading = key;
-      if (sameStep >= 2 && (await errorCount(page, '.jobs-easy-apply-modal'))) {
+      const text = await dialog.innerText().catch(() => '');
+      const key = ((text.match(/(\d+)\s*\/\s*(\d+)/) || [''])[0]) + text.split('\n').slice(0, 6).join('|');
+      sameStep = key === lastKey ? sameStep + 1 : 0;
+      lastKey = key;
+      if (sameStep >= 2 && (await errorCount(page, 'dialog[open]'))) {
         throw new NeedsUser('Easy Apply has a question the agent could not answer. Finish it in the Chrome window.');
       }
     }
-    throw new NeedsUser('Easy Apply has too many steps.');
+    throw new NeedsUser('Easy Apply has too many steps. Finish it in the Chrome window.');
   } catch (e) {
     // Leave the tab open when the user has to finish something.
     if (e instanceof NeedsUser) keep = true;
