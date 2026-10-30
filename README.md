@@ -34,6 +34,21 @@ Then, in the app:
 4. **Settings → Connect LinkedIn / Connect Upwork:** a separate Chrome window opens. Sign in there yourself, once; JobPilot never sees your password. If a site asks you to verify you are human, do it in that window.
 5. Press **Search now**, or ask the agent, e.g. "find remote React contracts".
 
+## Deploy (use it from anywhere)
+
+The `Dockerfile` runs JobPilot with Google Chrome on a virtual screen. The app shows that screen in a **Browser** window, so you can log in to LinkedIn and Upwork from your phone or laptop.
+
+On any Docker host (Railway, Render, Fly.io, a VPS):
+
+1. Deploy this repo with its Dockerfile. It needs about 1 GB of RAM for Chrome.
+2. Attach a **persistent volume at `/data`**: profile, CV, jobs and browser logins live there.
+3. Set environment variables:
+   - `JOBPILOT_PASSWORD`: required; the app refuses to start publicly without it
+   - `OPENAI_API_KEY`: optional (you can also paste it in Settings)
+4. Open the URL, log in, then press **Browser** and sign in to LinkedIn and Upwork.
+
+Note: sites treat logins from data-center IPs with suspicion. LinkedIn may ask for an email code (enter it in the Browser window), and Upwork's human check may block automated searches from cloud servers. The remote boards are not affected.
+
 ## How it works
 
 | Part | File |

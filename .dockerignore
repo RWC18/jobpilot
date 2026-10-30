@@ -1,0 +1,5 @@
+node_modules
+data
+config.local.json
+run-local.bat
+.git

@@ -5,6 +5,7 @@
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
+    if (res.status === 401) { location.href = '/login.html'; throw new Error('Log in first'); }
     if (!res.ok) throw new Error(data.error || res.statusText);
     return data;
   }
@@ -26,6 +27,8 @@
     openUrl: (url) => window.open(url, '_blank', 'noopener'),
     openCv: () => window.open('/cv', '_blank'),
     login: (site) => call('/api/login', { site }),
+    openBrowser: () => call('/api/browser/open', {}),
+    logout: () => call('/api/auth/logout', {}),
     runCycle: () => call('/api/run-cycle', {}),
     getSettings: () => call('/api/settings'),
     saveSettings: (patch) => call('/api/settings', patch),

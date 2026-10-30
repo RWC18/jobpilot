@@ -416,8 +416,24 @@ $('#cvFile').addEventListener('change', async (e) => {
 });
 $$('[data-login]').forEach((b) => b.addEventListener('click', async () => {
   await window.jp.login(b.dataset.login);
-  toast('Sign in in the Chrome window that opened');
+  if (state.remote) { closeSettings(); openViewer(); }
+  else toast('Sign in in the Chrome window that opened');
 }));
+
+// ---------- remote browser (deployed version) ----------
+
+async function openViewer() {
+  await window.jp.openBrowser();
+  const frame = $('#viewerFrame');
+  if (!frame.src) frame.src = 'browser.html';
+  $('#viewerScrim').hidden = false;
+  $('#viewer').hidden = false;
+}
+function closeViewer() { $('#viewerScrim').hidden = true; $('#viewer').hidden = true; }
+$('#browserBtn').addEventListener('click', openViewer);
+$('#closeViewer').addEventListener('click', closeViewer);
+$('#viewerScrim').addEventListener('click', closeViewer);
+$('#logoutBtn').addEventListener('click', async () => { await window.jp.logout(); location.href = '/login.html'; });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#drawer').hidden) closeSettings(); });
 
 function setMinScore(v) {
@@ -432,6 +448,9 @@ function setMinScore(v) {
   const data = await window.jp.init();
   state.jobs = data.jobs;
   state.settings = data.settings;
+  state.remote = data.remoteBrowser;
+  $('#browserBtn').hidden = !data.remoteBrowser;
+  $('#logoutBtn').hidden = !data.canLogout;
   setMinScore(data.settings.prefs.minScore);
   renderChat(data.chat);
   renderStatus(data.status);

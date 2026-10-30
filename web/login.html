@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JobPilot · Log in</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  body { display: grid; place-items: center; min-height: 100vh; overflow: auto; }
+  .login { width: min(360px, calc(100vw - 32px)); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 28px 24px; display: flex; flex-direction: column; gap: 14px; }
+  .login .brand { min-width: 0; margin-bottom: 6px; }
+  .login input { padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface-2); outline: none; }
+  .login input:focus { border-color: var(--accent); }
+  .err { color: var(--danger); font-size: 13px; min-height: 18px; margin: 0; }
+</style>
+</head>
+<body>
+<form class="login" id="f">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 11.5 20.5 4l-5.8 16.5-3.6-6.3L3 11.5Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m11.1 14.2 4.2-4.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </div>
+    <div><div class="brand-name">JobPilot</div><div class="brand-sub">Enter your password</div></div>
+  </div>
+  <input type="password" id="pw" placeholder="Password" autocomplete="current-password" required autofocus aria-label="Password">
+  <button class="primary" type="submit">Log in</button>
+  <p class="err" id="err" role="alert"></p>
+</form>
+<script>
+  document.getElementById('f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: document.getElementById('pw').value }) });
+    if (res.ok) location.href = '/';
+    else document.getElementById('err').textContent = (await res.json().catch(() => ({}))).error || 'Login failed';
+  });
+</script>
+</body>
+</html>

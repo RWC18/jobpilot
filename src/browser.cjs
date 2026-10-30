@@ -13,7 +13,8 @@ async function context() {
       channel: 'chrome',
       headless: false,
       viewport: null,
-      args: ['--window-size=1280,900'],
+      // Extra flags, e.g. "--no-sandbox" when running as root in Docker.
+      args: ['--window-size=1280,900', '--window-position=0,0', ...(process.env.JOBPILOT_CHROME_ARGS || '').split(/\s+/).filter(Boolean)],
     }).then((ctx) => {
       ctx.on('close', () => { ctxPromise = null; });
       return ctx;

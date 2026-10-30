@@ -4,7 +4,7 @@ const path = require('path');
 const { EventEmitter } = require('events');
 
 const ROOT = path.join(__dirname, '..');
-const DATA = path.join(ROOT, 'data');
+const DATA = process.env.JOBPILOT_DATA || path.join(ROOT, 'data');
 fs.mkdirSync(DATA, { recursive: true });
 
 const bus = new EventEmitter();
@@ -69,7 +69,7 @@ settings = {
   prefs: { ...DEFAULT_SETTINGS.prefs, ...settings.prefs },
   autopilot: { ...DEFAULT_SETTINGS.autopilot, ...settings.autopilot },
 };
-if (!settings.openaiApiKey) settings.openaiApiKey = localConfig().openaiApiKey || '';
+if (!settings.openaiApiKey) settings.openaiApiKey = localConfig().openaiApiKey || process.env.OPENAI_API_KEY || '';
 
 let jobs = load('jobs', {});
 let answers = load('answers', {});

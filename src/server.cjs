@@ -1,15 +1,22 @@
 // JobPilot web server: serves the UI, a JSON API and a live event stream (SSE).
 const http = require('http');
+const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const { WebSocketServer } = require('ws');
 const store = require('./store.cjs');
 const jobs = require('./jobs.cjs');
 const agent = require('./agent.cjs');
 const browser = require('./browser.cjs');
 const profile = require('./profile.cjs');
+const auth = require('./auth.cjs');
 
 const PORT = Number(process.env.PORT) || 4310;
+const HOST = process.env.HOST || '127.0.0.1';
+// In the Docker image Chrome runs on a virtual screen exposed over VNC; the UI shows it so you can log in to sites.
+const VNC_PORT = Number(process.env.JOBPILOT_VNC_PORT) || 0;
 const WEB = path.join(store.ROOT, 'web');
+const PUBLIC_PATHS = new Set(['/login.html', '/styles.css', '/api/auth/login']);
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.png': 'image/png', '.pdf': 'application/pdf' };
 
 // ---------- live events ----------
@@ -33,7 +40,11 @@ function publicSettings() {
 // ---------- API ----------
 
 const api = {
-  'GET /api/init': () => ({ jobs: store.allJobs(), log: store.log.slice(-200), chat: store.chat, status: jobs.status(), settings: publicSettings() }),
+  'GET /api/init': () => ({
+    jobs: store.allJobs(), log: store.log.slice(-200), chat: store.chat, status: jobs.status(), settings: publicSettings(),
+    remoteBrowser: Boolean(VNC_PORT), canLogout: auth.enabled,
+  }),
+  'POST /api/browser/open': () => browser.context().then(() => ({ ok: true })),
   'POST /api/chat': ({ text }) => agent.send(text, (ev) => broadcast('agent', ev)).then((reply) => ({ reply })),
   'POST /api/clear-chat': () => { store.setChat([]); return { ok: true }; },
   'POST /api/search': (opts) => jobs.searchAll(opts || {}).then((r) => ({ added: r.added.length, note: r.note })),
@@ -71,6 +82,24 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const route = `${req.method} ${url.pathname}`;
   try {
+    if (route === 'POST /api/auth/login') {
+      const { password } = JSON.parse((await readBody(req, 1e4)).toString() || '{}');
+      const r = auth.login(req, password);
+      if (r.error) return sendJson(res, 401, { error: r.error });
+      res.setHeader('Set-Cookie', r.cookie);
+      return sendJson(res, 200, { ok: true });
+    }
+    if (route === 'POST /api/auth/logout') {
+      res.setHeader('Set-Cookie', auth.logoutCookie);
+      return sendJson(res, 200, { ok: true });
+    }
+    if (!auth.allowed(req) && !PUBLIC_PATHS.has(url.pathname)) {
+      if (req.method === 'GET' && !url.pathname.startsWith('/api/') && url.pathname !== '/events') {
+        res.writeHead(302, { Location: '/login.html' });
+        return res.end();
+      }
+      return sendJson(res, 401, { error: 'Log in first' });
+    }
     if (route === 'GET /events') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
       res.write('retry: 2000\n\n');
@@ -112,11 +141,38 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// Bound to localhost only: the API can apply to jobs on your accounts.
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`JobPilot running at http://localhost:${PORT}`);
+// ---------- remote browser view (VNC over WebSocket) ----------
+
+if (VNC_PORT) {
+  const wss = new WebSocketServer({ noServer: true, handleProtocols: (protocols) => (protocols.has('binary') ? 'binary' : false) });
+  server.on('upgrade', (req, socket, head) => {
+    if (new URL(req.url, 'http://x').pathname !== '/websockify' || !auth.allowed(req)) {
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      const vnc = net.connect(VNC_PORT, '127.0.0.1');
+      vnc.on('data', (d) => ws.readyState === ws.OPEN && ws.send(d));
+      ws.on('message', (d) => vnc.write(d));
+      const end = () => { vnc.destroy(); ws.close(); };
+      vnc.on('close', end);
+      vnc.on('error', end);
+      ws.on('close', end);
+    });
+  });
+}
+
+// The API can apply to jobs on your accounts, so anything reachable from outside must have a password.
+const loopback = ['127.0.0.1', 'localhost', '::1'].includes(HOST);
+if (!loopback && !auth.enabled) {
+  console.error(`Refusing to listen on ${HOST} without a password. Set JOBPILOT_PASSWORD.`);
+  process.exit(1);
+}
+
+server.listen(PORT, HOST, () => {
+  console.log(`JobPilot running at http://${loopback ? 'localhost' : HOST}:${PORT}${auth.enabled ? ' (password protected)' : ''}`);
   jobs.scheduleAutopilot();
   jobs.resumeQueue();
 });
 
-process.on('SIGINT', async () => { await browser.close(); process.exit(0); });
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { await browser.close(); process.exit(0); });
