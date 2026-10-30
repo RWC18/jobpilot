@@ -1,0 +1,16 @@
+{
+  "name": "jobpilot",
+  "version": "1.0.0",
+  "description": "Local web app with an AI chat agent that finds jobs on LinkedIn, Upwork and remote job boards and applies for you",
+  "main": "src/server.cjs",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.cjs",
+    "cv": "node tools/render-cv.cjs",
+    "test:apply": "node tools/test-apply.cjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.55.0"
+  }
+}
