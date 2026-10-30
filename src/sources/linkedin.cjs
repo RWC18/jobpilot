@@ -1,7 +1,8 @@
-// LinkedIn: search through the public guest job API (no login needed),
-// apply through Easy Apply in the logged-in Chrome window.
+// LinkedIn: search in the logged-in Chrome window (falls back to the public guest job API),
+// apply through Easy Apply in the same window.
 const { getText, decode, stripHtml, classifyTerm, jitter, NeedsUser } = require('../util.cjs');
 const browser = require('../browser.cjs');
+const store = require('../store.cjs');
 const { fillForm, errorCount } = require('../apply/formfill.cjs');
 
 // f_JT codes: F full-time, C contract, T temporary, P part-time. LinkedIn has no per-project type, so contract covers it.
@@ -33,26 +34,81 @@ function parseCards(html, term) {
   return jobs;
 }
 
+/**
+ * Logged-in search in the JobPilot Chrome. Unlike the guest API it honours the remote filter.
+ * Returns null when LinkedIn wants a login, so the caller can fall back to the guest API.
+ */
+async function searchLoggedIn(page, q, term) {
+  await page.goto('https://www.linkedin.com/jobs/search/?' + q, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);
+  if (/\/(login|authwall|checkpoint|uas)/.test(page.url())) return null;
+  // The result list loads more cards as it scrolls.
+  await page.evaluate(async () => {
+    const first = document.querySelector('[data-occludable-job-id]');
+    let box = first?.parentElement;
+    while (box && box !== document.body && !(box.scrollHeight > box.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+    for (let i = 0; i < 14; i++) { (box && box !== document.body ? box : window).scrollBy(0, 500); await new Promise((r) => setTimeout(r, 350)); }
+  });
+  const cards = await page.evaluate(() => [...document.querySelectorAll('[data-occludable-job-id]')].map((el) => ({
+    id: el.getAttribute('data-occludable-job-id'),
+    lines: el.innerText.split('\n').map((t) => t.trim()).filter(Boolean),
+  })));
+  return cards.filter((c) => c.lines.length >= 3).map(({ id, lines }) => {
+    const rest = lines.filter((l, i) => i > 0 && !/with verification$/i.test(l) && l !== lines[0]);
+    const location = rest.find((l) => /\((remote|hybrid|on-site)\)|remote|, /i.test(l)) || rest[1] || '';
+    return {
+      id: 'linkedin:' + id,
+      source: 'linkedin',
+      sourceGroup: 'linkedin',
+      extId: id,
+      title: lines[0],
+      company: rest[0] || '',
+      location,
+      url: `https://www.linkedin.com/jobs/view/${id}/`,
+      applyUrl: `https://www.linkedin.com/jobs/view/${id}/`,
+      pay: rest.find((l) => /[$€£]\s?\d|\/(hr|yr|mo)\b/i.test(l)) || '',
+      postedAt: new Date().toISOString(),
+      term,
+      easyApply: lines.some((l) => /easy apply/i.test(l)),
+    };
+  }).filter((j) => j.easyApply);
+}
+
 async function search({ keywords, location, remoteOnly, terms, log }) {
   const out = [];
-  for (const kw of keywords) {
-    for (const term of Object.keys(TERM_FILTERS).filter((t) => terms[t])) {
-      if (term === 'project' && terms.short) continue; // same LinkedIn filter as contract
-      const q = new URLSearchParams({
-        keywords: kw,
-        location: location || 'Worldwide',
-        f_AL: 'true', // Easy Apply only
-        f_JT: TERM_FILTERS[term],
-        f_TPR: 'r604800', // past week
-        start: '0',
-      });
-      if (remoteOnly) q.set('f_WT', '2');
-      try {
-        const html = await getText('https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?' + q);
-        out.push(...parseCards(html, term));
-      } catch (e) { log?.(`LinkedIn search "${kw}" failed: ${e.message}`, 'warn'); }
-      await jitter(800, 1800);
+  // Use the logged-in Chrome when there is one (the PC app); the online version only has the guest API.
+  let page = null;
+  let loggedIn = !store.ONLINE;
+  try {
+    for (const kw of keywords) {
+      for (const term of Object.keys(TERM_FILTERS).filter((t) => terms[t])) {
+        if (term === 'project' && terms.short) continue; // same LinkedIn filter as contract
+        const q = new URLSearchParams({
+          keywords: kw,
+          location: location || 'Worldwide',
+          f_AL: 'true', // Easy Apply only
+          f_JT: TERM_FILTERS[term],
+          f_TPR: 'r604800', // past week
+        });
+        if (remoteOnly) q.set('f_WT', '2');
+        if (!location || /worldwide/i.test(location)) q.set('geoId', '92000000');
+        try {
+          if (loggedIn) {
+            page ||= await browser.newPage();
+            const jobs = await searchLoggedIn(page, q, term);
+            if (jobs) { out.push(...jobs); await jitter(2500, 5000); continue; }
+            loggedIn = false;
+            log?.('Not logged in to LinkedIn in the JobPilot Chrome; using the public search (it ignores the remote filter).', 'warn');
+          }
+          q.set('start', '0');
+          const html = await getText('https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?' + q);
+          out.push(...parseCards(html, term));
+        } catch (e) { log?.(`LinkedIn search "${kw}" failed: ${e.message}`, 'warn'); }
+        await jitter(800, 1800);
+      }
     }
+  } finally {
+    if (page) await page.close().catch(() => {});
   }
   const seen = new Set();
   return out.filter((j) => !seen.has(j.id) && seen.add(j.id));
