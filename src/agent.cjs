@@ -57,7 +57,7 @@ function fn(name, description, properties, required = []) {
   return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
 }
 
-const brief = (j) => ({ id: j.id, title: j.title, company: j.company, source: j.source, term: j.term, score: j.score, pay: j.pay || undefined, location: j.location, status: j.status, why: j.scoreReason || undefined, note: j.note || undefined });
+const brief = (j) => ({ id: j.id, url: j.url, title: j.title, company: j.company, source: j.source, term: j.term, score: j.score, pay: j.pay || undefined, location: j.location, status: j.status, why: j.scoreReason || undefined, note: j.note || undefined });
 
 const handlers = {
   async search_jobs(a) {
@@ -138,7 +138,12 @@ How to work:
 - Apply only to jobs the user asked for, or when autopilot mode is "auto". Before queueing more than 10 at once, confirm.
 - If something needs the user (login, captcha, unknown question), say exactly what to do.
 - Be concise. Use short markdown lists. Mention job ids only when useful for follow-ups.
-
+${store.ONLINE ? `
+You are running in the ONLINE version (no browser): searches run in the background and fill the board within 1-3 minutes,
+Upwork search is unavailable, and you cannot submit applications. When the user wants to apply, give the job links as
+markdown links (from get_job / list_jobs), offer a tailored cover letter, and remind them to press "Mark applied" afterwards.
+Auto-apply runs only in the JobPilot app on their PC.
+` : ''}
 Current settings: autopilot ${s.autopilot.enabled ? 'ON' : 'off'} (mode ${s.autopilot.mode}), min score ${s.prefs.minScore},
 keywords ${s.prefs.keywords.join(', ')}, kinds ${Object.keys(s.prefs.terms).filter((t) => s.prefs.terms[t]).join('/')}.
 

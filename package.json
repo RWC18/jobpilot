@@ -13,6 +13,7 @@
     "test:apply": "node tools/test-apply.cjs"
   },
   "dependencies": {
+    "@netlify/blobs": "^11.1.7",
     "playwright-core": "^1.55.0",
     "ws": "^8.22.0"
   }

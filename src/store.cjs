@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 
-const ROOT = path.join(__dirname, '..');
+const ROOT = process.env.JOBPILOT_ROOT || path.join(__dirname, '..');
 const DATA = process.env.JOBPILOT_DATA || path.join(ROOT, 'data');
 fs.mkdirSync(DATA, { recursive: true });
 
@@ -62,25 +62,38 @@ const DEFAULT_SETTINGS = {
   },
 };
 
-let settings = load('settings', DEFAULT_SETTINGS);
-// Merge new defaults into older saved settings.
-settings = {
-  ...structuredClone(DEFAULT_SETTINGS), ...settings,
-  prefs: { ...DEFAULT_SETTINGS.prefs, ...settings.prefs },
-  autopilot: { ...DEFAULT_SETTINGS.autopilot, ...settings.autopilot },
-};
-if (!settings.openaiApiKey) settings.openaiApiKey = localConfig().openaiApiKey || process.env.OPENAI_API_KEY || '';
+let settings, jobs, answers, chat, log, daily, runtime;
 
-let jobs = load('jobs', {});
-let answers = load('answers', {});
-let chat = load('chat', []);
-let log = load('log', []);
-let daily = load('daily', {});
+/** (Re)reads every collection from disk. The Netlify functions call this after pulling data from Blobs. */
+function reload() {
+  const saved = load('settings', DEFAULT_SETTINGS);
+  // Merge new defaults into older saved settings.
+  settings = {
+    ...structuredClone(DEFAULT_SETTINGS), ...saved,
+    prefs: { ...DEFAULT_SETTINGS.prefs, ...saved.prefs },
+    autopilot: { ...DEFAULT_SETTINGS.autopilot, ...saved.autopilot },
+  };
+  if (!settings.openaiApiKey) settings.openaiApiKey = localConfig().openaiApiKey || process.env.OPENAI_API_KEY || '';
+  jobs = load('jobs', {});
+  answers = load('answers', {});
+  chat = load('chat', []);
+  log = load('log', []);
+  daily = load('daily', {});
+  runtime = load('runtime', {});
+}
+reload();
 
 const store = {
   bus,
   DATA,
   ROOT,
+  reload,
+  /** True in the Netlify deployment: no browser there, so applying happens in the PC app. */
+  ONLINE: process.env.JOBPILOT_MODE === 'online',
+
+  /** Small shared flags (e.g. a search running in another function). */
+  get runtime() { return runtime; },
+  setRuntime(patch) { runtime = { ...runtime, ...patch }; save('runtime', runtime); bus.emit('status'); },
 
   get settings() { return settings; },
   updateSettings(patch) {
@@ -101,7 +114,8 @@ const store = {
     const added = [];
     for (const j of list) {
       if (jobs[j.id]) continue;
-      jobs[j.id] = { status: 'new', score: null, foundAt: new Date().toISOString(), ...j };
+      const now = new Date().toISOString();
+      jobs[j.id] = { status: 'new', score: null, foundAt: now, ...j, updatedAt: now };
       added.push(jobs[j.id]);
     }
     if (added.length) { save('jobs', jobs); bus.emit('jobs'); }
@@ -109,7 +123,8 @@ const store = {
   },
   updateJob(id, patch) {
     if (!jobs[id]) return null;
-    jobs[id] = { ...jobs[id], ...patch };
+    // updatedAt lets the Netlify sync keep the newest copy when two functions edit jobs at once.
+    jobs[id] = { ...jobs[id], ...patch, updatedAt: new Date().toISOString() };
     save('jobs', jobs);
     bus.emit('jobs');
     return jobs[id];

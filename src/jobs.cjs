@@ -79,8 +79,26 @@ async function scoreJobs(list) {
   }
 }
 
+// ---------- background hand-off (Netlify) ----------
+
+// In the Netlify API function, long work (search, re-score, autopilot) is handed to a background function
+// that can run 15 minutes; the request returns at once and the board fills in as results are saved.
+let background = null;
+function runInBackground(fn) { background = fn; }
+
+async function delegate(task, opts) {
+  const busy = store.runtime.busy;
+  if (busy && Date.now() - new Date(store.runtime.since).getTime() < 15 * 60000) {
+    return { added: [], note: `A ${busy} is already running. Results appear on the board as they come in.` };
+  }
+  store.setRuntime({ busy: task, since: new Date().toISOString() });
+  await background({ task, opts });
+  return { added: [], started: true, note: 'Started in the background. New jobs appear on the board in 1-3 minutes.' };
+}
+
 /** Re-scores jobs still in the inbox, e.g. after the profile changed or AI scoring was offline. */
 async function rescoreInbox({ all = false } = {}) {
+  if (background) return delegate('rescore', { all });
   const list = store.allJobs().filter((j) => ['new', 'shortlisted'].includes(j.status) && (all || j.score == null || /^Keyword/.test(j.scoreReason || '')));
   log(`Re-scoring ${list.length} inbox jobs…`);
   await scoreJobs(list);
@@ -92,6 +110,7 @@ async function rescoreInbox({ all = false } = {}) {
 // ---------- search ----------
 
 async function searchAll(opts = {}) {
+  if (background) return delegate('search', opts);
   if (state.searching) return { added: [], note: 'A search is already running.' };
   const prefs = store.settings.prefs;
   const keywords = opts.keywords?.length ? opts.keywords : prefs.keywords;
@@ -104,7 +123,7 @@ async function searchAll(opts = {}) {
   try {
     if (sources.linkedin) { log(`Searching LinkedIn for ${keywords.join(', ')}…`); found.push(...await linkedin.search(args)); }
     if (sources.remote) { log('Searching Remotive, RemoteOK and We Work Remotely…'); found.push(...(await remote.search(args)).filter((j) => terms[j.term])); }
-    if (sources.upwork) {
+    if (sources.upwork && !store.ONLINE) { // Upwork needs a browser
       log('Searching Upwork…');
       try { found.push(...await upwork.search(args)); }
       catch (e) { log(`Upwork search failed: ${e.message}`, 'warn'); }
@@ -126,6 +145,7 @@ function capFor(group) { return store.settings.autopilot.dailyCaps[group] ?? 10;
 function capReached(group) { return store.today()[group] >= capFor(group); }
 
 function enqueue(ids) {
+  if (store.ONLINE) throw new Error('Applying runs in the JobPilot app on your PC. Online, open the job, apply, then mark it applied.');
   const queued = [];
   for (const id of ids) {
     const j = store.getJob(id);
@@ -184,24 +204,26 @@ async function processQueue() {
 let timer = null;
 
 async function runCycle() {
+  if (background) return delegate('cycle', {});
   if (state.cycle) return;
   state.cycle = true; emitStatus();
   try {
     const ap = store.settings.autopilot;
     const prefs = store.settings.prefs;
-    log(`Autopilot cycle (${ap.mode === 'auto' ? 'auto-apply' : 'shortlist'} mode)`);
+    const auto = ap.mode === 'auto' && !store.ONLINE; // online there is no browser to apply with
+    log(`Autopilot cycle (${auto ? 'auto-apply' : 'shortlist'} mode)`);
     await searchAll();
     const picks = store.allJobs()
       .filter((j) => j.status === 'new' && j.score >= prefs.minScore && prefs.terms[j.term])
       .sort((a, b) => b.score - a.score);
-    if (ap.mode === 'auto') {
+    if (auto) {
       const ids = enqueue(picks.map((j) => j.id));
       log(`Autopilot queued ${ids.length} applications.`);
     } else {
       for (const j of picks) store.updateJob(j.id, { status: 'shortlisted' });
       if (picks.length) log(`Shortlisted ${picks.length} jobs for your approval.`, 'success');
     }
-    processQueue();
+    if (auto) processQueue();
   } catch (e) {
     log(`Autopilot cycle failed: ${e.message}`, 'error');
   } finally {
@@ -212,6 +234,7 @@ async function runCycle() {
 }
 
 function scheduleAutopilot() {
+  if (store.ONLINE) return; // a Netlify scheduled function runs the cycles
   clearInterval(timer);
   timer = null;
   const ap = store.settings.autopilot;
@@ -225,6 +248,8 @@ function status() {
   const count = (s) => all.filter((j) => j.status === s).length;
   return {
     ...state,
+    searching: state.searching || Boolean(store.runtime.busy),
+    online: store.ONLINE,
     autopilot: store.settings.autopilot,
     today: store.today(),
     caps: store.settings.autopilot.dailyCaps,
@@ -233,9 +258,10 @@ function status() {
 }
 
 function resumeQueue() {
+  if (store.ONLINE) return;
   // Jobs that were mid-apply when the app closed go back into the queue.
   for (const j of store.allJobs()) if (j.status === 'applying') store.updateJob(j.id, { status: 'queued' });
   processQueue();
 }
 
-module.exports = { searchAll, scoreJobs, rescoreInbox, enqueue, processQueue, runCycle, scheduleAutopilot, status, resumeQueue };
+module.exports = { runInBackground, searchAll, scoreJobs, rescoreInbox, enqueue, processQueue, runCycle, scheduleAutopilot, status, resumeQueue };

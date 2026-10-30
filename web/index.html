@@ -116,7 +116,7 @@
     <button class="icon-btn" id="closeDrawer" aria-label="Close">✕</button>
   </div>
   <form id="settingsForm" class="drawer-body">
-    <section>
+    <section id="secAccounts">
       <h3>Accounts</h3>
       <p class="hint">Sign in once in the JobPilot Chrome window. Passwords stay in Chrome; JobPilot never sees them.</p>
       <div class="row">
@@ -152,7 +152,7 @@
       <div class="field-group">
         <span>Sources</span>
         <label class="check"><input type="checkbox" name="src_linkedin"> LinkedIn</label>
-        <label class="check"><input type="checkbox" name="src_upwork"> Upwork</label>
+        <label class="check" id="srcUpwork"><input type="checkbox" name="src_upwork"> Upwork</label>
         <label class="check"><input type="checkbox" name="src_remote"> Remote boards</label>
       </div>
       <div class="grid2">
@@ -162,7 +162,7 @@
       <label>Never apply if posting mentions <span class="hint">comma separated</span><input name="excludeWords"></label>
     </section>
 
-    <section>
+    <section id="secLimits">
       <h3>Autopilot limits</h3>
       <div class="grid3">
         <label>LinkedIn / day<input name="cap_linkedin" type="number" min="0"></label>

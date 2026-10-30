@@ -1,0 +1,13 @@
+# Online version: the web/ folder is the site; netlify/functions hold the API, the background worker
+# and the hourly autopilot. Set JOBPILOT_PASSWORD (and optionally OPENAI_API_KEY) in the site's
+# environment variables.
+[build]
+  publish = "web"
+  command = "echo 'no build step'"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  # Only the PC app drives a browser; keep Playwright out of the function bundles.
+  external_node_modules = ["playwright-core"]
+  included_files = ["assets/**"]

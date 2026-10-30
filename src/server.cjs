@@ -6,9 +6,8 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 const store = require('./store.cjs');
 const jobs = require('./jobs.cjs');
-const agent = require('./agent.cjs');
 const browser = require('./browser.cjs');
-const profile = require('./profile.cjs');
+const { routes } = require('./routes.cjs');
 const auth = require('./auth.cjs');
 
 const PORT = Number(process.env.PORT) || 4310;
@@ -32,35 +31,10 @@ store.bus.on('log', (entry) => broadcast('log', entry));
 store.bus.on('status', () => broadcast('status', jobs.status()));
 store.bus.on('settings', () => broadcast('status', jobs.status()));
 
-function publicSettings() {
-  const s = store.settings;
-  return { ...s, openaiApiKey: s.openaiApiKey ? '••••' + s.openaiApiKey.slice(-4) : '', profile: profile.getProfile() };
-}
-
-// ---------- API ----------
-
 const api = {
-  'GET /api/init': () => ({
-    jobs: store.allJobs(), log: store.log.slice(-200), chat: store.chat, status: jobs.status(), settings: publicSettings(),
-    remoteBrowser: Boolean(VNC_PORT), canLogout: auth.enabled,
-  }),
-  'POST /api/browser/open': () => browser.context().then(() => ({ ok: true })),
-  'POST /api/chat': ({ text }) => agent.send(text, (ev) => broadcast('agent', ev)).then((reply) => ({ reply })),
-  'POST /api/clear-chat': () => { store.setChat([]); return { ok: true }; },
-  'POST /api/search': (opts) => jobs.searchAll(opts || {}).then((r) => ({ added: r.added.length, note: r.note })),
-  'POST /api/apply': ({ ids }) => ({ queued: jobs.enqueue(ids).length }),
-  'POST /api/set-status': ({ ids, status }) => { ids.forEach((id) => store.updateJob(id, { status })); return { ok: true }; },
-  'POST /api/login': ({ site }) => browser.openLogin(site).then(() => ({ ok: true })),
-  'POST /api/run-cycle': () => { jobs.runCycle(); return { ok: true }; },
-  'GET /api/settings': () => publicSettings(),
-  'POST /api/settings': (patch) => {
-    const { profile: profileText, openaiApiKey, ...rest } = patch;
-    if (profileText != null) profile.setProfile(profileText);
-    if (openaiApiKey && !openaiApiKey.startsWith('••••')) rest.openaiApiKey = openaiApiKey.trim();
-    store.updateSettings(rest);
-    jobs.scheduleAutopilot();
-    return publicSettings();
-  },
+  ...routes,
+  'POST /api/chat': (body) => routes['POST /api/chat'](body, { onAgentEvent: (ev) => broadcast('agent', ev) }),
+  'GET /api/init': () => routes['GET /api/init']({}, { remoteBrowser: Boolean(VNC_PORT), canLogout: auth.enabled }),
 };
 
 function readBody(req, limit = 15e6) {

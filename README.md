@@ -34,7 +34,22 @@ Then, in the app:
 4. **Settings → Connect LinkedIn / Connect Upwork:** a separate Chrome window opens. Sign in there yourself, once; JobPilot never sees your password. If a site asks you to verify you are human, do it in that window.
 5. Press **Search now**, or ask the agent, e.g. "find remote React contracts".
 
-## Deploy (use it from anywhere)
+## Free online version (Netlify)
+
+JobPilot also runs on Netlify's free plan, so you can use it from your phone:
+
+- Works online: search LinkedIn and the remote boards, AI scoring, the chat agent, cover letters, tracking ("Mark applied"), and hourly autopilot shortlisting.
+- Not online: auto-applying and Upwork search. They need a real browser, so use the PC app for those.
+
+Setup:
+
+1. On Netlify, choose **Add new project → Import an existing project → GitHub** and pick your fork. `netlify.toml` already has the settings.
+2. In **Project configuration → Environment variables**, add `JOBPILOT_PASSWORD` (required) and `OPENAI_API_KEY` (optional; you can also paste it in Settings). Then redeploy.
+3. Open the site and log in.
+
+Data is stored in Netlify Blobs. `node tools/test-netlify.mjs` runs the online handlers locally against an in-memory store.
+
+## Deploy with Docker (full version, including auto-apply)
 
 The `Dockerfile` runs JobPilot with Google Chrome on a virtual screen. The app shows that screen in a **Browser** window, so you can log in to LinkedIn and Upwork from your phone or laptop.
 

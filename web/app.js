@@ -93,7 +93,7 @@ function renderChat(history) {
   const visible = history.filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content);
   if (!visible.length) {
     const first = ((state.settings?.profile || '').match(/^First name:\s*(.+)$/m) || [])[1];
-    messagesEl.innerHTML = `<div class="welcome"><b>Hi${first ? ' ' + esc(first.trim()) : ''} 👋</b><br>I search LinkedIn, Upwork and remote job boards, rank jobs against your CV and apply for you.
+    messagesEl.innerHTML = `<div class="welcome"><b>Hi${first ? ' ' + esc(first.trim()) : ''} 👋</b><br>${state.online ? 'I search LinkedIn and remote job boards and rank jobs against your profile. Open a job to apply, then mark it applied. (Auto-apply runs in the JobPilot app on your PC.)' : 'I search LinkedIn, Upwork and remote job boards, rank jobs against your CV and apply for you.'}
       Tell me what you want — long term, short term or paid per project — or pick a suggestion below.</div>`;
   }
   for (const m of visible) addMessage(m.role, m.content);
@@ -223,6 +223,7 @@ function jobCard(j) {
   const skipBtn = $('.act-skip', el);
   if (j.status === 'applied' || j.status === 'applying' || j.status === 'queued') { applyBtn.remove(); skipBtn.remove(); }
   if (j.status === 'needs_you' || j.status === 'failed') applyBtn.textContent = 'Retry';
+  if (state.online) applyBtn.textContent = 'Mark applied';
   if (j.status === 'skipped') { skipBtn.textContent = 'Restore'; applyBtn.remove(); }
   return el;
 }
@@ -256,7 +257,12 @@ $('#jobs').addEventListener('click', async (e) => {
   const id = card.dataset.id;
   const job = state.jobs.find((j) => j.id === id);
   if (e.target.closest('.title')) { e.preventDefault(); window.jp.openUrl(job.url); return; }
-  if (e.target.closest('.act-apply')) { await window.jp.apply([id]); toast('Queued — applying shortly'); return; }
+  if (e.target.closest('.act-apply')) {
+    if (state.online) { await window.jp.setStatus([id], 'applied'); toast('Marked as applied'); return; }
+    await window.jp.apply([id]);
+    toast('Queued — applying shortly');
+    return;
+  }
   if (e.target.closest('.act-skip')) { await window.jp.setStatus([id], job.status === 'skipped' ? 'new' : 'skipped'); return; }
   if (e.target.matches('.pick input')) {
     if (e.target.checked) state.selected.add(id); else state.selected.delete(id);
@@ -284,6 +290,13 @@ $('#minScore').addEventListener('input', (e) => { state.minScore = +e.target.val
 $('#bulkClear').addEventListener('click', () => { state.selected.clear(); renderJobs(); });
 $('#bulkSkip').addEventListener('click', async () => { await window.jp.setStatus([...state.selected], 'skipped'); state.selected.clear(); renderBulk(); });
 $('#bulkApply').addEventListener('click', async () => {
+  if (state.online) {
+    await window.jp.setStatus([...state.selected], 'applied');
+    toast(`${state.selected.size} marked as applied`);
+    state.selected.clear();
+    renderBulk();
+    return;
+  }
   const n = await window.jp.apply([...state.selected]);
   state.selected.clear();
   renderBulk();
@@ -291,8 +304,10 @@ $('#bulkApply').addEventListener('click', async () => {
 });
 
 $('#searchBtn').addEventListener('click', async () => {
-  const added = await window.jp.search();
-  toast(`${added} new jobs found`);
+  try {
+    const r = await window.jp.search();
+    toast(r.started ? 'Searching in the background; new jobs appear in 1-3 minutes' : r.note || `${r.added} new jobs found`);
+  } catch (err) { toast(err.message); }
 });
 
 // ---------- status / autopilot ----------
@@ -304,6 +319,7 @@ function renderStatus(s) {
   $$('#apSeg button').forEach((b) => { b.classList.toggle('on', b.dataset.ap === mode); b.setAttribute('aria-checked', b.dataset.ap === mode); });
   $('#apState').textContent = s.cycle ? 'running a cycle…' : ap.enabled ? `every ${ap.intervalMin} min` : '';
 
+  $('#meters').hidden = state.online;
   $('#meters').innerHTML = [['linkedin', 'LinkedIn'], ['upwork', 'Upwork'], ['remote', 'Remote']].map(([k, label]) => {
     const used = s.today[k] || 0;
     const cap = s.caps[k] || 0;
@@ -449,6 +465,13 @@ function setMinScore(v) {
   state.jobs = data.jobs;
   state.settings = data.settings;
   state.remote = data.remoteBrowser;
+  state.online = data.online;
+  if (data.online) {
+    // No browser online: applying happens in the PC app, so hide what drives it.
+    $('#apSeg [data-ap="auto"]').hidden = true;
+    $('#bulkApply').textContent = 'Mark applied';
+    for (const id of ['#secAccounts', '#secLimits', '#srcUpwork']) $(id).hidden = true;
+  }
   $('#browserBtn').hidden = !data.remoteBrowser;
   $('#logoutBtn').hidden = !data.canLogout;
   setMinScore(data.settings.prefs.minScore);
@@ -456,6 +479,8 @@ function setMinScore(v) {
   renderStatus(data.status);
   data.log.forEach(addLog);
   renderJobs();
+  window.jp.startUpdates(data.live);
+  window.jp.seedLog?.(data.log);
 
   let pending = null;
   window.jp.onJobs((jobs) => {

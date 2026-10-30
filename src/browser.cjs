@@ -1,7 +1,6 @@
 // One visible Chrome window (your installed Chrome) with its own profile in data/chrome-profile.
 // You log in to LinkedIn / Upwork there once; the session cookies stay in that profile.
 const path = require('path');
-const { chromium } = require('playwright-core');
 const store = require('./store.cjs');
 
 const PROFILE_DIR = process.env.JOBPILOT_CHROME_PROFILE || path.join(store.DATA, 'chrome-profile');
@@ -9,6 +8,9 @@ let ctxPromise = null;
 
 async function context() {
   if (!ctxPromise) {
+    if (store.ONLINE) throw new Error('No browser in the online version. Apply from the JobPilot app on your PC.');
+    // Loaded on first use so the Netlify functions never need Playwright.
+    const { chromium } = require('playwright-core');
     ctxPromise = chromium.launchPersistentContext(PROFILE_DIR, {
       channel: 'chrome',
       headless: false,

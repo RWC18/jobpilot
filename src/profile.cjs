@@ -7,8 +7,9 @@ const USER_FILE = path.join(store.DATA, 'profile.md');
 const DEFAULT_FILE = path.join(store.ROOT, 'assets', 'profile.example.md');
 
 function getProfile() {
-  try { return fs.readFileSync(USER_FILE, 'utf8'); }
-  catch { return fs.readFileSync(DEFAULT_FILE, 'utf8'); }
+  try { return fs.readFileSync(USER_FILE, 'utf8'); } catch { /* not saved yet */ }
+  try { return fs.readFileSync(DEFAULT_FILE, 'utf8'); } catch { /* example missing from a bundle */ }
+  return '# Candidate profile\nWrite your name, contact details, skills and experience here (Settings → Profile).\n';
 }
 
 function setProfile(text) { fs.writeFileSync(USER_FILE, text); }
