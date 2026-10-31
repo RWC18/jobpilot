@@ -58,6 +58,7 @@ function collectInPage(scopeSel) {
       required: el.required || el.getAttribute('aria-required') === 'true',
       value: type === 'checkbox' ? el.checked : el.value,
       combobox: el.getAttribute('role') === 'combobox' || el.hasAttribute('aria-autocomplete'),
+      placeholder: el.getAttribute('placeholder') || '',
     };
     if (f.kind === 'select') {
       f.options = [...el.options].map((o) => o.text.trim()).filter((o) => o && !/^(select|choose|--)/i.test(o));
@@ -141,9 +142,29 @@ function bestOption(options, want) {
   return options[i < 0 ? 0 : i];
 }
 
+/** Date inputs (start date etc.): native date type, a date placeholder, or a label about a date. */
+const isDateField = (f) => f.kind === 'text' && (f.inputType === 'date'
+  || /mm|dd|yyyy|tt\.mm|jjjj|гггг/i.test(f.placeholder || '')
+  || /\b(start|available|earliest)\b.*\bdate\b|startdatum|дата/i.test(f.label));
+
+const looksLikeDate = (v) => /^\d{1,4}[./-]\d{1,2}[./-]\d{1,4}$/.test(String(v || '').trim());
+
+/** Today plus the profile's notice period (default 2 weeks), in the field's format. */
+function startDate(f) {
+  const weeks = Number((facts()['notice period'] || '2 weeks').match(/(\d+)\s*week/i)?.[1] || 2);
+  const d = new Date(Date.now() + weeks * 7 * 864e5);
+  const [y, m, day] = [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')];
+  if (f.inputType === 'date' || /^yyyy/i.test(f.placeholder)) return `${y}-${m}-${day}`;
+  if (/^(dd|tt|jj)/i.test(f.placeholder)) return `${day}.${m}.${y}`;
+  return `${m}/${day}/${y}`;
+}
+
 async function answerFields(fields, job) {
-  const todo = fields.filter((f) => f.kind !== 'file' && (isEmpty(f) || (f.kind === 'checkbox' && f.required && !f.value)));
   const answers = {};
+  // Dates are computed, never cached or guessed: a cached "2 weeks" in a date box fails validation.
+  for (const f of fields.filter((x) => isDateField(x) && !looksLikeDate(x.value))) answers[f.id] = startDate(f);
+  const todo = fields.filter((f) => f.kind !== 'file' && !(f.id in answers) && !isDateField(f)
+    && (isEmpty(f) || (f.kind === 'checkbox' && f.required && !f.value)));
   const unknown = [];
   for (const f of todo) {
     const cached = store.answerFor(f.label);
@@ -201,7 +222,7 @@ async function fillFields(page, fields, answers, { cvPath, skipFiles }) {
         if (want !== Boolean(f.value)) await clickHidden(loc);
       } else {
         await loc.fill(String(v));
-        if (f.combobox) {
+        if (f.combobox && !isDateField(f)) {
           await page.waitForTimeout(1000);
           await loc.press('ArrowDown');
           await loc.press('Enter');

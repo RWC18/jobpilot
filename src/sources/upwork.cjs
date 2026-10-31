@@ -80,7 +80,7 @@ No greetings like "Dear Hiring Manager", no emojis, no placeholders. Sign with t
   );
 }
 
-async function apply(job, { cvPath, log }) {
+async function apply(job, { cvPath, log, dryRun = false }) {
   const page = await browser.newPage();
   let keep = false;
   try {
@@ -115,6 +115,11 @@ async function apply(job, { cvPath, log }) {
 
     const send = page.locator('button:has-text("Send for"), button:has-text("Submit proposal"), button:has-text("Submit a proposal")').first();
     if (!(await send.isVisible().catch(() => false))) throw new NeedsUser('Could not find the Send button on the proposal page.');
+    if (dryRun) {
+      // Test mode: the proposal is written and filled in; leave without sending or spending Connects.
+      log?.(`Dry run: proposal ready for ${job.title} (${connects || '?'} Connects); not sent.`);
+      return 'dry-run';
+    }
     await send.click();
     await page.waitForTimeout(2500);
 

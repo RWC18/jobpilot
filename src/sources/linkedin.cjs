@@ -1,7 +1,9 @@
 // LinkedIn: search in the logged-in Chrome window (falls back to the public guest job API),
 // apply through Easy Apply in the same window.
+const path = require('path');
 const { getText, decode, stripHtml, classifyTerm, jitter, NeedsUser } = require('../util.cjs');
 const browser = require('../browser.cjs');
+const { coverLetterFile } = require('../apply/coverletter.cjs');
 const store = require('../store.cjs');
 const { fillForm, errorCount } = require('../apply/formfill.cjs');
 
@@ -138,6 +140,42 @@ const BTN = {
 };
 const DIALOG = 'dialog[open], [role="dialog"]';
 
+/** LinkedIn's upload buttons open a file picker instead of exposing a file input. */
+async function uploadVia(page, button, file) {
+  const chooser = page.waitForEvent('filechooser', { timeout: 8000 });
+  await button.click();
+  await (await chooser).setFiles(file);
+  await page.waitForTimeout(3000);
+}
+
+/** Makes sure the chosen CV is the selected resume, uploading it if LinkedIn doesn't have it yet. */
+async function chooseResume(page, dialog, cvPath) {
+  const upload = dialog.getByRole('button', { name: /^upload resume$/i }).first();
+  if (!(await upload.isVisible().catch(() => false))) return;
+  const name = path.basename(cvPath);
+  const card = dialog.getByText(name, { exact: true }).first();
+  if (await card.isVisible().catch(() => false)) {
+    // Click the card's radio; LinkedIn lists the newest upload first and may have another one selected.
+    const radio = card.locator('xpath=ancestor::*[.//input[@type="radio"]][1]//input[@type="radio"]').first();
+    if (!(await radio.isChecked().catch(() => false))) await card.click().catch(() => {});
+    return;
+  }
+  await uploadVia(page, upload, cvPath);
+}
+
+/** Uploads a tailored cover letter PDF when the step asks for one and none is attached yet. */
+async function attachCoverLetter(page, dialog, job, log) {
+  const upload = dialog.getByRole('button', { name: /^upload cover letter$/i }).first();
+  if (!(await upload.isVisible().catch(() => false))) return;
+  if (/Cover_Letter_/i.test(await dialog.innerText().catch(() => ''))) return;
+  try {
+    await uploadVia(page, upload, await coverLetterFile(job));
+    log?.(`Attached a cover letter for ${job.title}`);
+  } catch (e) {
+    log?.(`Could not attach a cover letter: ${e.message}`, 'warn');
+  }
+}
+
 /** Walks through the Easy Apply dialog. Returns 'applied' or throws NeedsUser with the reason. */
 async function apply(job, { cvPath, log, dryRun = false }) {
   const page = await browser.newPage();
@@ -155,6 +193,14 @@ async function apply(job, { cvPath, log, dryRun = false }) {
     if (!(await btn.isVisible().catch(() => false))) throw new NeedsUser('No Easy Apply button (job closed or applies on the company site).');
     await btn.click();
 
+    // Some jobs first show a "Job search safety reminder" with a "Continue applying" button.
+    await page.waitForTimeout(2000);
+    const goOn = page.locator(DIALOG).getByText(/^(continue applying|продолжить отклик)$/i).first();
+    if (await goOn.isVisible().catch(() => false)) {
+      await goOn.click();
+      await page.waitForTimeout(2000);
+    }
+
     const dialog = page.locator(DIALOG).first();
     await dialog.waitFor({ timeout: 10000 });
     let lastKey = '';
@@ -165,6 +211,8 @@ async function apply(job, { cvPath, log, dryRun = false }) {
       // Resumes uploaded before are listed by file name; pick those instead of uploading a duplicate.
       const dialogText = await dialog.innerText().catch(() => '');
       await fillForm(page, { scopeSel: 'dialog[open]', job, cvPath, skipFiles: /\.pdf|\.docx/i.test(dialogText) });
+      await chooseResume(page, dialog, cvPath);
+      await attachCoverLetter(page, dialog, job, log);
 
       // Don't follow the company as a side effect of applying.
       const follow = dialog.getByRole('checkbox', { name: /follow|подпис/i }).first();
