@@ -159,13 +159,18 @@ function enqueue(ids) {
 
 const APPLIERS = { linkedin: linkedin.apply, upwork: upwork.apply, remotive: external.apply, remoteok: external.apply, wwr: external.apply };
 
-async function applyOne(job) {
+async function applyOne(job, { dryRun = false } = {}) {
   const cvPath = store.settings.cvPath;
   state.applying = job.id; emitStatus();
   store.updateJob(job.id, { status: 'applying' });
-  log(`Applying: ${job.title} @ ${job.company} (${job.source})`);
+  log(`${dryRun ? 'Dry run' : 'Applying'}: ${job.title} @ ${job.company} (${job.source})`);
   try {
-    await APPLIERS[job.source](job, { cvPath, log });
+    const result = await APPLIERS[job.source](job, { cvPath, log, dryRun });
+    if (result === 'dry-run') {
+      store.updateJob(job.id, { status: 'shortlisted', note: 'Dry run passed: form filled, ready to submit' });
+      log(`✓ Dry run passed: ${job.title} @ ${job.company}`, 'success');
+      return;
+    }
     store.updateJob(job.id, { status: 'applied', appliedAt: new Date().toISOString(), note: '' });
     store.bumpToday(job.sourceGroup);
     log(`✓ Applied: ${job.title} @ ${job.company}`, 'success');
@@ -179,18 +184,19 @@ async function applyOne(job) {
 }
 
 let queueRunning = false;
-async function processQueue() {
+/** Applies to queued jobs one by one. only = limit to these ids (used by dry runs). */
+async function processQueue({ dryRun = false, only = null } = {}) {
   if (queueRunning) return;
   queueRunning = true;
   try {
     for (;;) {
       const next = store.allJobs()
-        .filter((j) => j.status === 'queued' && !capReached(j.sourceGroup))
+        .filter((j) => j.status === 'queued' && !capReached(j.sourceGroup) && (!only || only.includes(j.id)))
         .sort((a, b) => (a.queuedAt || '').localeCompare(b.queuedAt || ''))[0];
       if (!next) break;
-      await applyOne(next);
-      const [lo, hi] = store.settings.autopilot.delaySec;
-      if (store.allJobs().some((j) => j.status === 'queued')) await jitter(lo * 1000, hi * 1000);
+      await applyOne(next, { dryRun });
+      const [lo, hi] = dryRun ? [3, 6] : store.settings.autopilot.delaySec;
+      if (store.allJobs().some((j) => j.status === 'queued' && (!only || only.includes(j.id)))) await jitter(lo * 1000, hi * 1000);
     }
     const waiting = store.allJobs().filter((j) => j.status === 'queued').length;
     if (waiting) log(`${waiting} queued jobs wait for tomorrow (daily limits reached).`, 'warn');
@@ -203,27 +209,34 @@ async function processQueue() {
 
 let timer = null;
 
-async function runCycle() {
-  if (background) return delegate('cycle', {});
+/**
+ * One autopilot cycle: search, then queue the best new matches (as many as today's limits allow,
+ * per source) or shortlist them. dryRun: fill the forms of the top 3 but send nothing.
+ */
+async function runCycle({ dryRun = false } = {}) {
+  if (background) return delegate('cycle', { dryRun });
   if (state.cycle) return;
   state.cycle = true; emitStatus();
   try {
     const ap = store.settings.autopilot;
     const prefs = store.settings.prefs;
     const auto = ap.mode === 'auto' && !store.ONLINE; // online there is no browser to apply with
-    log(`Autopilot cycle (${auto ? 'auto-apply' : 'shortlist'} mode)`);
+    log(`Autopilot cycle (${dryRun ? 'dry run' : auto ? 'auto-apply' : 'shortlist'} mode)`);
     await searchAll();
     const picks = store.allJobs()
       .filter((j) => j.status === 'new' && j.score >= prefs.minScore && prefs.terms[j.term])
       .sort((a, b) => b.score - a.score);
-    if (auto) {
-      const ids = enqueue(picks.map((j) => j.id));
-      log(`Autopilot queued ${ids.length} applications.`);
+    if (auto || dryRun) {
+      const left = {};
+      for (const g of ['linkedin', 'upwork', 'remote']) left[g] = dryRun ? 3 : Math.max(0, capFor(g) - (store.today()[g] || 0));
+      const chosen = picks.filter((j) => left[j.sourceGroup]-- > 0).slice(0, dryRun ? 3 : undefined);
+      const ids = enqueue(chosen.map((j) => j.id));
+      log(`Autopilot queued ${ids.length} ${dryRun ? 'dry-run ' : ''}applications.`);
+      await processQueue({ dryRun, only: dryRun ? ids : null });
     } else {
       for (const j of picks) store.updateJob(j.id, { status: 'shortlisted' });
       if (picks.length) log(`Shortlisted ${picks.length} jobs for your approval.`, 'success');
     }
-    if (auto) processQueue();
   } catch (e) {
     log(`Autopilot cycle failed: ${e.message}`, 'error');
   } finally {

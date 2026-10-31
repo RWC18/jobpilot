@@ -5,3 +5,6 @@ run-local.bat
 
 # Local Netlify folder
 .netlify
+
+# Personal launcher for the daily task
+run-daily.bat

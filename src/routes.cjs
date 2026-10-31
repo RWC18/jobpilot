@@ -35,8 +35,8 @@ const routes = {
   },
   'POST /api/login': ({ site }) => browser.openLogin(site).then(() => ({ ok: true })),
   'POST /api/browser/open': () => browser.context().then(() => ({ ok: true })),
-  'POST /api/run-cycle': async () => {
-    const cycle = jobs.runCycle();
+  'POST /api/run-cycle': async (body) => {
+    const cycle = jobs.runCycle({ dryRun: Boolean(body?.dryRun) });
     if (store.ONLINE) await cycle; // online it only hands the cycle to the background function
     return { ok: true };
   },

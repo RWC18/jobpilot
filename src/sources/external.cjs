@@ -25,7 +25,7 @@ async function reachForm(page) {
   return page;
 }
 
-async function apply(job, { cvPath }) {
+async function apply(job, { cvPath, dryRun = false }) {
   let page = await browser.newPage();
   let keep = false;
   try {
@@ -49,6 +49,7 @@ async function apply(job, { cvPath }) {
     if (await browser.hasHumanCheck(page)) throw new NeedsUser('The form has a captcha. Finish it in the Chrome window.');
     const submit = page.locator(SUBMIT).last();
     if (!(await submit.isVisible().catch(() => false))) throw new NeedsUser('No Submit button found.');
+    if (dryRun) return 'dry-run'; // test mode: form filled, not sent
     await submit.click();
     await page.waitForTimeout(5000);
 
