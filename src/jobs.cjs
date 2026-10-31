@@ -144,7 +144,8 @@ async function searchAll(opts = {}) {
 function capFor(group) { return store.settings.autopilot.dailyCaps[group] ?? 10; }
 function capReached(group) { return store.today()[group] >= capFor(group); }
 
-function enqueue(ids) {
+/** Queues jobs for applying. start=false leaves running the queue to the caller (runCycle, which may be a dry run). */
+function enqueue(ids, { start = true } = {}) {
   if (store.ONLINE) throw new Error('Applying runs in the JobPilot app on your PC. Online, open the job, apply, then mark it applied.');
   const queued = [];
   for (const id of ids) {
@@ -153,7 +154,7 @@ function enqueue(ids) {
     store.updateJob(id, { status: 'queued', queuedAt: new Date().toISOString(), note: '' });
     queued.push(id);
   }
-  processQueue();
+  if (start) processQueue();
   return queued;
 }
 
@@ -184,19 +185,19 @@ async function applyOne(job, { dryRun = false } = {}) {
 }
 
 let queueRunning = false;
-/** Applies to queued jobs one by one. only = limit to these ids (used by dry runs). */
-async function processQueue({ dryRun = false, only = null } = {}) {
+/** Applies to queued jobs one by one. */
+async function processQueue() {
   if (queueRunning) return;
   queueRunning = true;
   try {
     for (;;) {
       const next = store.allJobs()
-        .filter((j) => j.status === 'queued' && !capReached(j.sourceGroup) && (!only || only.includes(j.id)))
+        .filter((j) => j.status === 'queued' && !capReached(j.sourceGroup))
         .sort((a, b) => (a.queuedAt || '').localeCompare(b.queuedAt || ''))[0];
       if (!next) break;
-      await applyOne(next, { dryRun });
-      const [lo, hi] = dryRun ? [3, 6] : store.settings.autopilot.delaySec;
-      if (store.allJobs().some((j) => j.status === 'queued' && (!only || only.includes(j.id)))) await jitter(lo * 1000, hi * 1000);
+      await applyOne(next);
+      const [lo, hi] = store.settings.autopilot.delaySec;
+      if (store.allJobs().some((j) => j.status === 'queued')) await jitter(lo * 1000, hi * 1000);
     }
     const waiting = store.allJobs().filter((j) => j.status === 'queued').length;
     if (waiting) log(`${waiting} queued jobs wait for tomorrow (daily limits reached).`, 'warn');
@@ -230,9 +231,15 @@ async function runCycle({ dryRun = false } = {}) {
       const left = {};
       for (const g of ['linkedin', 'upwork', 'remote']) left[g] = dryRun ? 3 : Math.max(0, capFor(g) - (store.today()[g] || 0));
       const chosen = picks.filter((j) => left[j.sourceGroup]-- > 0).slice(0, dryRun ? 3 : undefined);
-      const ids = enqueue(chosen.map((j) => j.id));
-      log(`Autopilot queued ${ids.length} ${dryRun ? 'dry-run ' : ''}applications.`);
-      await processQueue({ dryRun, only: dryRun ? ids : null });
+      if (dryRun) {
+        // Straight to the appliers, never through the queue, so nothing here can be sent for real.
+        log(`Autopilot picked ${chosen.length} jobs for a dry run.`);
+        for (const j of chosen) { await applyOne(j, { dryRun: true }); await jitter(3000, 6000); }
+      } else {
+        const ids = enqueue(chosen.map((j) => j.id), { start: false });
+        log(`Autopilot queued ${ids.length} applications.`);
+        await processQueue();
+      }
     } else {
       for (const j of picks) store.updateJob(j.id, { status: 'shortlisted' });
       if (picks.length) log(`Shortlisted ${picks.length} jobs for your approval.`, 'success');
